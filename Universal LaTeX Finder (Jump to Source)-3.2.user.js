@@ -91,12 +91,12 @@
         #univ-tex-panel {
             position: fixed;
             top: 15%;
-            left: 50%;
+            left: 10%;
             /* 初始状态通过 transform 居中 */
             transform: translateX(-50%) scale(0.95); 
             opacity: 0; /* 初始隐藏 */
             
-            width: 620px;
+            width: 240px;
             height: 65vh;
             min-width: 320px;
             min-height: 250px;
