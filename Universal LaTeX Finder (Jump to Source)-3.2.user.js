@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         [全网通用] Universal LaTeX Finder (Resizable)
+// @name         [Apple UI] Universal LaTeX Finder
 // @namespace    http://tampermonkey.net/
-// @version      3.3
-// @description  探测任意网页上的数学公式，支持拖拽、缩放、复制和定位
-// @author       You
+// @version      4.0
+// @description  探测网页公式，采用 macOS 风格毛玻璃UI，支持丝滑动画、拖拽与缩放
+// @author       Apple UI Expert
 // @match        *://*/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
@@ -13,190 +13,387 @@
     'use strict';
 
     // ===========================
-    // 1. UI 样式
+    // 1. Apple Style UI 系统
     // ===========================
+    // 定义核心动画曲线 (Apple Ease-Out)
+    const BEZIER_EASE = 'cubic-bezier(0.19, 1, 0.22, 1)'; 
+    const SPRING_BOUNCE = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+
     GM_addStyle(`
-        /* 探测悬浮球 */
+        /* ----------------------------------
+           全局字体与重置
+           ---------------------------------- */
+        .apple-tex-root {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            letter-spacing: -0.01em;
+            box-sizing: border-box;
+        }
+
+        /* ----------------------------------
+           悬浮球 (Floating Button)
+           ---------------------------------- */
         #univ-tex-btn {
             position: fixed;
             bottom: 30px;
             right: 30px;
-            width: 45px;
-            height: 45px;
-            background: #673AB7;
-            color: white;
+            width: 48px;
+            height: 48px;
+            /* iOS 风格渐变 */
+            background: linear-gradient(135deg, #5E5CE6, #3634A3);
+            color: rgba(255,255,255,0.95);
             border-radius: 50%;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            /* 深度阴影 */
+            box-shadow: 0 8px 24px rgba(54, 52, 163, 0.35), 0 2px 8px rgba(0,0,0,0.1);
             cursor: pointer;
             z-index: 2147483647;
-            font-size: 20px;
+            font-size: 22px;
+            font-weight: 500;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: transform 0.2s, width 0.3s;
+            /* 弹性动画 */
+            transition: all 0.6s ${SPRING_BOUNCE}, background 0.3s ease;
             user-select: none;
             overflow: hidden;
-            white-space: nowrap;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
         }
+
         #univ-tex-btn:hover {
-            width: 130px;
-            border-radius: 30px;
-            background: #5E35B1;
+            transform: scale(1.08) translateY(-2px);
+            box-shadow: 0 12px 32px rgba(54, 52, 163, 0.45);
+            width: 140px;
+            border-radius: 24px; /*由圆变长胶囊*/
         }
+        
+        #univ-tex-btn::after {
+            content: "探测公式";
+            font-size: 15px;
+            font-weight: 600;
+            margin-left: 0;
+            opacity: 0;
+            width: 0;
+            white-space: nowrap;
+            transition: all 0.4s ${BEZIER_EASE};
+            display: inline-block;
+        }
+        
         #univ-tex-btn:hover::after {
-            content: " 探测公式";
-            font-size: 14px;
+            opacity: 1;
+            width: 60px;
             margin-left: 8px;
         }
 
-        /* 结果面板 */
+        /* ----------------------------------
+           主面板 (Glassmorphism Panel)
+           ---------------------------------- */
         #univ-tex-panel {
             position: fixed;
-            top: 10%;
+            top: 15%;
             left: 50%;
-            transform: translateX(-50%); /* 初始居中 */
-            width: 600px;
-            height: 60vh;
-            min-width: 300px;  /* 最小宽度 */
-            min-height: 200px; /* 最小高度 */
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 15px 50px rgba(0,0,0,0.3);
+            /* 初始状态通过 transform 居中 */
+            transform: translateX(-50%) scale(0.95); 
+            opacity: 0; /* 初始隐藏 */
+            
+            width: 620px;
+            height: 65vh;
+            min-width: 320px;
+            min-height: 250px;
+            
+            /* 毛玻璃核心代码 */
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: saturate(180%) blur(25px);
+            -webkit-backdrop-filter: saturate(180%) blur(25px);
+            
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 18px;
+            /* 弥散阴影 */
+            box-shadow: 
+                0 20px 50px -12px rgba(0, 0, 0, 0.25),
+                0 0 1px rgba(0,0,0,0.1);
+            
             z-index: 2147483647;
             display: none;
             flex-direction: column;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-            border: 1px solid #ddd;
-            /* 关键：允许通过 CSS resize 属性调整，但为了更好的体验我们用 JS 实现 */
+            
+            /* 打开时的动画 */
+            transition: transform 0.5s ${BEZIER_EASE}, opacity 0.4s ease;
         }
 
-        /* 标题栏 */
+        /* 面板显示时的类 */
+        #univ-tex-panel.is-visible {
+            opacity: 1;
+            /* 注意：如果处于拖拽模式，transform 会被 JS 覆盖为 none */
+            transform: translateX(-50%) scale(1); 
+        }
+
+        /* ----------------------------------
+           标题栏 (Title Bar)
+           ---------------------------------- */
         .tex-panel-head {
-            padding: 12px 15px;
-            background: #f5f5f5;
-            border-bottom: 1px solid #ddd;
+            height: 52px;
+            padding: 0 16px;
+            /* 极淡的分隔线 */
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-radius: 8px 8px 0 0;
-            cursor: move;
+            cursor: default; /* 拖拽区域 */
             user-select: none;
-            flex-shrink: 0; /* 防止标题栏被压缩 */
         }
-        .tex-panel-head h3 { margin: 0; font-size: 16px; color: #333; pointer-events: none; }
+        
+        .tex-title-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .tex-panel-head h3 {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 600;
+            color: #1d1d1f; /* Apple Dark Grey */
+        }
+        
+        .tex-badge {
+            background: rgba(0,0,0,0.06);
+            color: #666;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
 
-        /* 内容区域 */
+        /* macOS 风格关闭按钮 */
+        .btn-icon-close {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(0,0,0,0.05);
+            color: #555;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        .btn-icon-close:hover {
+            background: rgba(0,0,0,0.1);
+            color: #000;
+        }
+
+        /* ----------------------------------
+           内容区域 (Content)
+           ---------------------------------- */
         .tex-panel-body {
             flex: 1;
             overflow-y: auto;
-            padding: 10px;
-            background: #fafafa;
+            padding: 12px;
+            /* 滚动条美化 */
+            scrollbar-width: thin;
+            scrollbar-color: rgba(0,0,0,0.2) transparent;
         }
-        
-        /* 缩放手柄 (右下角) */
-        .tex-resize-handle {
-            position: absolute;
-            bottom: 0;
-            right: 0;
-            width: 15px;
-            height: 15px;
-            cursor: se-resize; /* 对角线光标 */
-            background: linear-gradient(135deg, transparent 50%, #ccc 50%); /* 绘制三角形条纹 */
-            border-radius: 0 0 8px 0;
-            z-index: 10;
+        .tex-panel-body::-webkit-scrollbar {
+            width: 6px;
+        }
+        .tex-panel-body::-webkit-scrollbar-thumb {
+            background-color: rgba(0,0,0,0.15);
+            border-radius: 3px;
         }
 
-        /* 单个公式项 */
+        /* ----------------------------------
+           列表项 (List Items)
+           ---------------------------------- */
         .tex-item {
-            background: #fff;
-            margin-bottom: 10px;
-            border: 1px solid #eee;
-            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.5); /* 半透明白 */
+            margin-bottom: 8px;
+            border-radius: 12px;
+            border: 1px solid rgba(0,0,0,0.03);
             display: flex;
             flex-direction: column;
-            transition: all 0.2s;
+            transition: all 0.3s ${BEZIER_EASE};
             position: relative;
+            overflow: hidden;
         }
+        
         .tex-item:hover {
-            border-color: #2196F3;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            transform: scale(1.005);
+            border-color: rgba(0,0,0,0.08);
         }
 
         .tex-content-area {
-            padding: 12px;
+            padding: 14px;
             cursor: pointer;
             width: 100%;
             box-sizing: border-box;
         }
-        .tex-content-area:hover { background-color: #f0f7ff; }
+        
+        .code-text {
+            font-family: "SF Mono", Consolas, Menlo, monospace;
+            font-size: 13px;
+            color: #333;
+            line-height: 1.5;
+            word-break: break-all;
+        }
 
+        /* 底部工具条 */
         .tex-action-bar {
-            border-top: 1px solid #eee;
-            padding: 5px 10px;
+            padding: 8px 14px;
+            background: rgba(245, 245, 247, 0.5); /* 极淡的灰 */
+            border-top: 1px solid rgba(0,0,0,0.03);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: #fff;
-            border-radius: 0 0 6px 6px;
         }
 
+        /* 标签 Tag */
         .tex-tag {
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 10px;
-            color: white;
-            font-weight: bold;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 6px;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+        .tag-katex { color: #2E7D32; background: rgba(76, 175, 80, 0.15); }
+        .tag-mathjax { color: #1565C0; background: rgba(33, 150, 243, 0.15); }
+        .tag-img { color: #E65100; background: rgba(255, 152, 0, 0.15); }
+
+        /* 按钮组 */
+        .tex-btn-group {
+            display: flex;
+            gap: 8px;
         }
         
         .item-btn {
-            background: none;
             border: none;
-            cursor: pointer;
+            background: transparent;
             font-size: 12px;
-            color: #666;
-            padding: 4px 8px;
-            border-radius: 4px;
+            font-weight: 500;
+            padding: 4px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+            color: #555;
             display: flex;
             align-items: center;
             gap: 4px;
         }
-        .item-btn:hover { background: #eee; color: #333; }
-        .btn-locate { color: #E91E63; }
-        .btn-locate:hover { background: #FCE4EC; }
+        .item-btn:hover { background: rgba(0,0,0,0.06); color: #000; }
+        
+        .btn-locate { color: #007AFF; } /* Apple Blue */
+        .btn-locate:hover { background: rgba(0, 122, 255, 0.1); }
 
+        /* ----------------------------------
+           底部与缩放 (Footer & Resize)
+           ---------------------------------- */
         .tex-panel-foot {
-            padding: 12px;
-            border-top: 1px solid #ddd;
+            padding: 12px 16px;
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
             display: flex;
             justify-content: flex-end;
-            gap: 10px;
-            background: white;
-            border-radius: 0 0 8px 8px;
-            flex-shrink: 0; /* 防止底部按钮被压缩 */
-            margin-right: 10px; /* 给 resize handle 留点位置 */
+            gap: 12px;
+            background: rgba(255,255,255,0.3);
+            position: relative; /* for resize handle */
         }
         
-        .u-btn { padding: 8px 16px; border:none; border-radius:4px; cursor:pointer; font-weight:bold; font-size: 13px; }
-        .u-close { background:#f0f0f0; color:#333; }
-        .u-copy-all { background:#673AB7; color:white; }
-        
-        .code-text {
-            font-family: Consolas, Monaco, monospace;
+        /* 通用按钮 Apple Style */
+        .u-btn {
+            padding: 8px 18px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
             font-size: 13px;
-            word-break: break-all;
-            line-height: 1.4;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+        .u-close {
+            background: rgba(0,0,0,0.05);
             color: #333;
         }
-
-        @keyframes target-blink {
-            0% { background-color: rgba(255, 235, 59, 0.8); box-shadow: 0 0 15px rgba(255, 235, 59, 0.8); transform: scale(1.05); }
-            100% { background-color: transparent; box-shadow: none; transform: scale(1); }
+        .u-close:hover { background: rgba(0,0,0,0.1); }
+        
+        .u-copy-all {
+            background: #007AFF;
+            color: white;
+            box-shadow: 0 2px 10px rgba(0, 122, 255, 0.3);
         }
-        .tex-highlight-target { animation: target-blink 2s ease-out; border-radius: 4px; }
+        .u-copy-all:hover {
+            background: #006ce6;
+            transform: translateY(-1px);
+        }
+
+        /* 隐形但易用的 Resize Handle */
+        .tex-resize-handle {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 20px;
+            height: 20px;
+            cursor: se-resize;
+            z-index: 20;
+        }
+        /* 视觉上的 Resize 指示器 (两条小线) */
+        .tex-resize-handle::after {
+            content: "";
+            position: absolute;
+            bottom: 5px;
+            right: 5px;
+            width: 8px;
+            height: 1px;
+            background: #ccc;
+            box-shadow: 0 -3px 0 #ccc;
+            transform: rotate(-45deg);
+        }
+
+        /* ----------------------------------
+           交互反馈动画
+           ---------------------------------- */
+        @keyframes apple-blink {
+            0% { background-color: rgba(255, 235, 59, 0.6); box-shadow: 0 0 0 4px rgba(255, 235, 59, 0.3); }
+            100% { background-color: transparent; box-shadow: 0 0 0 0 transparent; }
+        }
+        .tex-highlight-target {
+            animation: apple-blink 1.5s cubic-bezier(0.25, 1, 0.5, 1);
+            border-radius: 4px;
+        }
+        
+        /* Toast 提示 */
+        #apple-toast {
+            position: fixed;
+            top: 40px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-20px);
+            background: rgba(255,255,255,0.9);
+            backdrop-filter: blur(20px) saturate(180%);
+            color: #1d1d1f;
+            padding: 10px 24px;
+            border-radius: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            font-size: 14px;
+            font-weight: 500;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.4s ${SPRING_BOUNCE};
+            z-index: 2147483647;
+            border: 1px solid rgba(0,0,0,0.05);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #apple-toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
     `);
 
     // ===========================
-    // 2. 核心探测逻辑
+    // 2. 逻辑核心 (Detect & Utilities)
     // ===========================
     function detectMath() {
         const results = [];
@@ -216,15 +413,15 @@
         });
         // MathJax 2
         document.querySelectorAll('script[type^="math/tex"]').forEach(script => {
-            add(script.textContent, 'MathJax2', script.parentElement);
+            add(script.textContent, 'MathJax', script.parentElement);
         });
         // MathJax 3 / Aria
         document.querySelectorAll('mjx-container, [role="math"]').forEach(el => {
             const label = el.getAttribute('aria-label');
-            if (label) add(label, 'MathJax3', el);
+            if (label) add(label, 'MathJax', el);
             else if (el.dataset.latex) add(el.dataset.latex, 'Data-Attr', el);
         });
-        // Images
+        // Images (Wiki/Forums)
         document.querySelectorAll('img').forEach(img => {
             const alt = img.alt || "";
             if ((img.className && img.className.toString().includes('math')) || img.src.includes('latex') || (alt.includes('\\') && alt.length > 5)) {
@@ -238,213 +435,226 @@
         if (!el) return;
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.add('tex-highlight-target');
-        setTimeout(() => { el.classList.remove('tex-highlight-target'); }, 2000);
+        setTimeout(() => el.classList.remove('tex-highlight-target'), 2000);
     }
 
     // ===========================
-    // 3. 拖拽与缩放逻辑 (核心更新)
+    // 3. 窗口交互 (Drag & Resize)
     // ===========================
-    
-    // 拖拽窗口 (Head)
     function makeDraggable(el, handle) {
-        let isDragging = false;
-        let startX, startY, initialLeft, initialTop;
-
+        let isDragging = false, startX, startY, initialLeft, initialTop;
+        
         handle.addEventListener('mousedown', (e) => {
-            if (e.target.tagName === 'BUTTON') return;
+            if (e.target.closest('button')) return; // 忽略按钮点击
             isDragging = true;
-            startX = e.clientX;
-            startY = e.clientY;
+            startX = e.clientX; startY = e.clientY;
             const rect = el.getBoundingClientRect();
-            initialLeft = rect.left;
-            initialTop = rect.top;
+            initialLeft = rect.left; initialTop = rect.top;
             
-            // 转换为绝对定位
-            el.style.transform = 'none'; 
+            // 切换为绝对定位，移除 transform 居中
+            el.style.transform = 'none';
             el.style.left = initialLeft + 'px';
             el.style.top = initialTop + 'px';
             el.style.margin = '0';
             
             document.body.style.cursor = 'move';
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
         });
 
         function onMouseMove(e) {
             if (!isDragging) return;
-            e.preventDefault();
-            const dx = e.clientX - startX;
-            const dy = e.clientY - startY;
-            el.style.left = (initialLeft + dx) + 'px';
-            el.style.top = (initialTop + dy) + 'px';
+            el.style.left = (initialLeft + (e.clientX - startX)) + 'px';
+            el.style.top = (initialTop + (e.clientY - startY)) + 'px';
         }
 
         function onMouseUp() {
             isDragging = false;
             document.body.style.cursor = 'default';
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
         }
     }
 
-    // 缩放窗口 (Resize Handle)
     function makeResizable(el, handle) {
-        let isResizing = false;
-        let startX, startY, startWidth, startHeight;
-
+        let isResizing = false, startX, startY, startW, startH;
+        
         handle.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            e.stopPropagation(); // 防止触发拖拽
+            e.stopPropagation(); e.preventDefault();
             isResizing = true;
-            startX = e.clientX;
-            startY = e.clientY;
-            
-            // 获取当前计算后的宽高
+            startX = e.clientX; startY = e.clientY;
             const rect = el.getBoundingClientRect();
-            startWidth = rect.width;
-            startHeight = rect.height;
-
-            document.body.style.cursor = 'se-resize';
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
-        });
-
-        function onMouseMove(e) {
-            if (!isResizing) return;
-            // 计算新的宽高
-            const dx = e.clientX - startX;
-            const dy = e.clientY - startY;
+            startW = rect.width; startH = rect.height;
             
-            // 简单的限制：最小 300x200
-            const newWidth = Math.max(300, startWidth + dx);
-            const newHeight = Math.max(200, startHeight + dy);
-
-            el.style.width = newWidth + 'px';
-            el.style.height = newHeight + 'px';
+            document.body.style.cursor = 'se-resize';
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+        });
+        
+        function onMove(e) {
+            if (!isResizing) return;
+            const newW = Math.max(320, startW + (e.clientX - startX));
+            const newH = Math.max(250, startH + (e.clientY - startY));
+            el.style.width = newW + 'px';
+            el.style.height = newH + 'px';
         }
-
-        function onMouseUp() {
+        
+        function onUp() {
             isResizing = false;
             document.body.style.cursor = 'default';
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
         }
     }
 
     // ===========================
-    // 4. UI 构建
+    // 4. 构建 UI (HTML Structure)
     // ===========================
+    // 悬浮球
     const btn = document.createElement('div');
     btn.id = 'univ-tex-btn';
-    btn.innerHTML = '∑';
-    btn.title = '探测公式';
+    btn.className = 'apple-tex-root';
+    btn.innerHTML = '∑'; // SF Symbols 风格通常用 SVG，这里 Unicode 足够简洁
     document.body.appendChild(btn);
 
+    // 主面板
     const panel = document.createElement('div');
     panel.id = 'univ-tex-panel';
+    panel.className = 'apple-tex-root';
     panel.innerHTML = `
         <div class="tex-panel-head">
-            <h3>页面公式 (<span id="tex-count">0</span>)</h3>
-            <button class="u-btn u-close" id="tex-head-close" style="padding:4px 8px; font-size:12px;">✕</button>
+            <div class="tex-title-group">
+                <h3>公式探测</h3>
+                <span class="tex-badge" id="tex-count">0</span>
+            </div>
+            <button class="btn-icon-close" id="tex-head-close">✕</button>
         </div>
         <div class="tex-panel-body" id="tex-p-body"></div>
         <div class="tex-panel-foot">
             <button class="u-btn u-close" id="tex-p-cancel">关闭</button>
             <button class="u-btn u-copy-all" id="tex-p-copy">复制全部</button>
+            <div class="tex-resize-handle"></div>
         </div>
-        <div class="tex-resize-handle"></div>
     `;
     document.body.appendChild(panel);
 
-    // 绑定交互
+    // Toast
+    const toast = document.createElement('div');
+    toast.id = 'apple-toast';
+    toast.className = 'apple-tex-root';
+    document.body.appendChild(toast);
+
+    function showToast(msg, icon='✅') {
+        toast.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+        toast.classList.add('show');
+        // 防抖
+        clearTimeout(toast.timer);
+        toast.timer = setTimeout(() => toast.classList.remove('show'), 2000);
+    }
+
+    // 绑定拖拽和缩放
     makeDraggable(panel, panel.querySelector('.tex-panel-head'));
     makeResizable(panel, panel.querySelector('.tex-resize-handle'));
 
+    // ===========================
+    // 5. 渲染与事件
+    // ===========================
     function renderList(list) {
         const body = document.getElementById('tex-p-body');
         document.getElementById('tex-count').textContent = list.length;
         body.innerHTML = '';
-        
+
         if (list.length === 0) {
-            body.innerHTML = `<div style="text-align:center; padding:40px; color:#999;">未探测到公式</div>`;
+            body.innerHTML = `
+                <div style="text-align:center; padding:60px 20px; color:#888;">
+                    <div style="font-size:36px; margin-bottom:12px; opacity:0.5;">👻</div>
+                    <div style="font-weight:500;">未探测到公式</div>
+                    <div style="font-size:12px; margin-top:6px; opacity:0.7;">当前页面可能使用了非标准渲染方式</div>
+                </div>`;
             return;
         }
 
         list.forEach(item => {
-            const itemDiv = document.createElement('div');
-            itemDiv.className = 'tex-item';
-            let color = item.type === 'KaTeX' ? '#4caf50' : (item.type.includes('MathJax') ? '#2196f3' : '#ff9800');
+            const el = document.createElement('div');
+            el.className = 'tex-item';
+            
+            // Tag 样式映射
+            let tagClass = 'tag-katex';
+            if (item.type.includes('MathJax')) tagClass = 'tag-mathjax';
+            if (item.type === 'Image') tagClass = 'tag-img';
 
-            itemDiv.innerHTML = `
+            el.innerHTML = `
                 <div class="tex-content-area" title="点击复制 LaTeX">
                     <div class="code-text">${escapeHtml(item.source)}</div>
                 </div>
                 <div class="tex-action-bar">
-                    <span class="tex-tag" style="background:${color}">${item.type}</span>
-                    <div style="display:flex; gap:10px;">
-                        <button class="item-btn btn-locate">📍 定位</button>
-                        <button class="item-btn btn-copy-one">📋 复制</button>
+                    <span class="tex-tag ${tagClass}">${item.type}</span>
+                    <div class="tex-btn-group">
+                        <button class="item-btn btn-locate">
+                            <span>📍</span>定位
+                        </button>
+                        <button class="item-btn btn-copy-one">
+                            <span>📋</span>复制
+                        </button>
                     </div>
                 </div>
             `;
             
-            const copyAction = (e) => {
+            // 交互逻辑
+            const copyFunc = (e) => {
                 e.stopPropagation();
                 GM_setClipboard(item.source);
-                showToast('已复制');
-                itemDiv.querySelector('.tex-content-area').style.background = '#e8f5e9';
-                setTimeout(() => itemDiv.querySelector('.tex-content-area').style.background = '', 300);
+                showToast('已复制到剪贴板');
+                // 闪烁反馈
+                el.style.background = 'rgba(52, 199, 89, 0.2)'; // Apple Green light
+                setTimeout(() => el.style.background = '', 300);
             };
-            
-            itemDiv.querySelector('.tex-content-area').addEventListener('click', copyAction);
-            itemDiv.querySelector('.btn-copy-one').addEventListener('click', copyAction);
 
-            itemDiv.querySelector('.btn-locate').addEventListener('click', (e) => {
+            el.querySelector('.tex-content-area').addEventListener('click', copyFunc);
+            el.querySelector('.btn-copy-one').addEventListener('click', copyFunc);
+            
+            el.querySelector('.btn-locate').addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (item.element) {
                     scrollToElement(item.element);
-                    showToast('已定位');
+                    showToast('已跳转到公式位置', '📍');
                 } else {
-                    showToast('无法定位原元素');
+                    showToast('无法定位原元素', '⚠️');
                 }
             });
 
-            body.appendChild(itemDiv);
+            body.appendChild(el);
         });
     }
 
-    // ===========================
-    // 5. 事件绑定
-    // ===========================
+    // 打开面板
     btn.addEventListener('click', () => {
         const results = detectMath();
         renderList(results);
         panel.style.display = 'flex';
+        // 强制重绘以触发 transition
+        setTimeout(() => panel.classList.add('is-visible'), 10);
     });
 
-    const closeFunc = () => { panel.style.display = 'none'; };
+    // 关闭面板
+    const closeFunc = () => { 
+        panel.classList.remove('is-visible');
+        setTimeout(() => { panel.style.display = 'none'; }, 400); // 等待动画结束
+    };
     document.getElementById('tex-head-close').addEventListener('click', closeFunc);
     document.getElementById('tex-p-cancel').addEventListener('click', closeFunc);
+
+    // 复制全部
     document.getElementById('tex-p-copy').addEventListener('click', () => {
         const text = detectMath().map(r => r.source).join('\n\n');
-        if (text) { GM_setClipboard(text); showToast('全部已复制'); }
+        if (text) { 
+            GM_setClipboard(text); 
+            showToast(`已复制全部 ${detectMath().length} 个公式`); 
+        }
     });
 
     function escapeHtml(text) {
         return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    function showToast(msg) {
-        let t = document.getElementById('u-toast');
-        if (!t) {
-            t = document.createElement('div');
-            t.id = 'u-toast';
-            t.style.cssText = 'position:fixed; top:20px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.8); color:white; padding:8px 16px; border-radius:20px; z-index:2147483647; font-size:13px; transition:opacity 0.3s; pointer-events:none;';
-            document.body.appendChild(t);
-        }
-        t.textContent = msg;
-        t.style.opacity = '1';
-        setTimeout(() => { t.style.opacity = '0'; }, 2000);
     }
 
 })();
